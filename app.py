@@ -7,8 +7,8 @@ from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import PolynomialFeatures
-import re
 import warnings
+import re
 
 warnings.filterwarnings('ignore')
 
@@ -18,31 +18,35 @@ warnings.filterwarnings('ignore')
 st.set_page_config(
     page_title="CPIF | Pandemic Intelligence",
     layout="wide",
-    page_icon="🇵🇰",
+    page_icon="🛡️",
     initial_sidebar_state="expanded"
 )
 
-# Professional CSS (Hidden "Student Project" vibe)
+# Custom CSS for "Pandemic Command Center" Theme
 st.markdown("""
     <style>
-    .metric-card { background-color: #f9f9f9; padding: 15px; border-radius: 10px; border-left: 5px solid #2563EB; }
-    .css-1d391kg { padding-top: 1rem; } 
+    .metric-card { background-color: #f0f2f6; padding: 15px; border-radius: 10px; border-left: 5px solid #ff4b4b; }
+    .stTabs [data-baseweb="tab-list"] { gap: 2px; }
+    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #f0f2f6; border-radius: 4px 4px 0px 0px; gap: 1px; padding-top: 10px; padding-bottom: 10px; }
+    .stTabs [aria-selected="true"] { background-color: #ffffff; border-top: 2px solid #ff4b4b; }
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🇵🇰 CPIF: Comparative Pandemic Intelligence Framework")
+st.title("🛡️ CPIF: Comparative Pandemic Intelligence Framework")
 
 # ============================================
-# 2. Data Loading & Cleaning
+# 2. Data Engine (Robust & Aggregated)
 # ============================================
 @st.cache_data
-def load_data():
+def load_and_process_data():
+    # Load Data
     try:
         df = pd.read_csv("Refined + New entities.csv")
     except FileNotFoundError:
+        st.error("Data file 'Refined + New entities.csv' not found.")
         return pd.DataFrame(), {}
 
-    # 1. Robust Regex Cleaning (Fixes double underscores/spaces)
+    # 1. Robust Column Cleaning (Regex)
     df.columns = (df.columns.astype(str)
                   .str.lower()
                   .str.replace(r'[^a-z0-9]+', '_', regex=True)
@@ -55,20 +59,22 @@ def load_data():
         'clinic_total_no_of_covid_patients_currently_admitted': 'Hospital Admissions',
         'test_positivity_ratio': 'Test Positivity Rate (TPR)',
         'oxygen_dependency_ratio': 'Oxygen Dependency',
-        'clinic_total_numbers_recovered_and_discharged_so_far': 'Total Recovered'
+        'clinic_total_numbers_recovered_and_discharged_so_far': 'Total Recovered',
+        'new_cases_7da': 'New Cases (7-Day Avg)'
     }
 
-    # 3. Numeric Conversion
+    # 3. Type Conversion
     numeric_cols = [
-        'grand_total_cases_till_date', 'death_cumulative_total_deaths',
+        'grand_total_cases_till_date', 
+        'death_cumulative_total_deaths',
         'clinic_total_numbers_recovered_and_discharged_so_far',
-        'grand_total_tests_conducted_till_date', 'test_positivity_ratio',
+        'grand_total_tests_conducted_till_date', 
+        'test_positivity_ratio',
         'clinic_total_no_of_covid_patients_currently_admitted',
         'clinic_total_no_of_patients_currently_on_ventilator',
-        'clinic_total_no_of_beds_allocated_for_covid_patients',
-        'clinic_total_no_of_ventilators_allocated_for_covid_patients',
         'clinic_total_on_oxygen',
-        'healtcare_stress_index', 'oxygen_dependency_ratio'
+        'healtcare_stress_index', 
+        'oxygen_dependency_ratio'
     ]
 
     for col in numeric_cols:
@@ -83,316 +89,331 @@ def load_data():
     if 'date' in df.columns:
         df['date'] = pd.to_datetime(df['date'], errors='coerce')
         df = df.sort_values(by=['province', 'date'])
-    
-    # 5. Basic Feature Engineering (Province Level)
+    else:
+        st.error("Column 'date' not found.")
+        return pd.DataFrame(), {}
+
+    # 5. Core Feature Engineering
+    # Calculate Daily New Numbers from Cumulative
     df['new_cases'] = df.groupby('province')['grand_total_cases_till_date'].diff().fillna(0).clip(lower=0)
     df['new_deaths'] = df.groupby('province')['death_cumulative_total_deaths'].diff().fillna(0).clip(lower=0)
     
     # Smoothers
     df['new_cases_7da'] = df.groupby('province')['new_cases'].rolling(7).mean().reset_index(0, drop=True).fillna(0)
+    df['new_deaths_7da'] = df.groupby('province')['new_deaths'].rolling(7).mean().reset_index(0, drop=True).fillna(0)
+
+    # Wave Definition (For Comparisons)
+    def assign_wave(d):
+        if d < pd.Timestamp("2020-05-31"): return "Wave 1"
+        elif d < pd.Timestamp("2020-10-31"): return "Lull 1"
+        elif d < pd.Timestamp("2021-02-28"): return "Wave 2"
+        elif d < pd.Timestamp("2021-06-30"): return "Wave 3 (Alpha/Beta)"
+        elif d < pd.Timestamp("2021-12-31"): return "Wave 4 (Delta)"
+        elif d < pd.Timestamp("2022-03-31"): return "Wave 5 (Omicron)"
+        else: return "Endemic Phase"
     
-    # Define Waves (For Historical Context)
-    df["wave"] = "Inter-Wave Period"
-    df.loc[df["date"].between("2020-03-01", "2020-07-31"), "wave"] = "Wave 1 (Original)"
-    df.loc[df["date"].between("2020-10-01", "2021-01-31"), "wave"] = "Wave 2 (Winter '20)"
-    df.loc[df["date"].between("2021-03-01", "2021-06-30"), "wave"] = "Wave 3 (Alpha/Beta)"
-    df.loc[df["date"].between("2021-07-01", "2021-10-31"), "wave"] = "Wave 4 (Delta)"
-    df.loc[df["date"].between("2022-01-01", "2022-03-31"), "wave"] = "Wave 5 (Omicron)"
+    df['wave'] = df['date'].apply(assign_wave)
 
     return df, display_map
 
-df, col_map = load_data()
+df_raw, col_map = load_and_process_data()
 
-if df.empty:
-    st.error("Dataset not found. Please upload 'Refined + New entities.csv'.")
+if df_raw.empty:
     st.stop()
 
 # ============================================
-# 3. Sidebar & Aggregation Logic (The FIX)
+# 3. Sidebar Controls
 # ============================================
-st.sidebar.header("🔍 Controls")
+st.sidebar.header("🔍 Intelligence Filters")
 
 # Province Selection
-provinces = ["All"] + sorted(df['province'].unique().tolist())
-province = st.sidebar.selectbox("Region / Province", provinces)
+provinces = ["All"] + sorted(df_raw['province'].unique().tolist())
+province_sel = st.sidebar.selectbox("Region / Province", provinces, index=0)
 
 # Date Selection
-min_d, max_d = df['date'].min(), df['date'].max()
-start_date, end_date = st.sidebar.date_input("Analysis Period", [max_d - timedelta(days=90), max_d], min_value=min_d, max_value=max_d)
+min_d, max_d = df_raw['date'].min().date(), df_raw['date'].max().date()
+date_range = st.sidebar.date_input("Analysis Period", [max_d - timedelta(days=90), max_d], min_value=min_d, max_value=max_d)
 
-# --- AGGREGATION ENGINE (Fixes "Punjab > All" bug) ---
-mask = (df['date'].dt.date >= start_date) & (df['date'].dt.date <= end_date)
-raw_filtered = df.loc[mask]
-
-if province == "All":
-    # SUM numeric columns for National View
-    numeric_cols_to_sum = [
-        'new_cases', 'new_deaths', 'grand_total_cases_till_date', 
-        'death_cumulative_total_deaths', 'clinic_total_numbers_recovered_and_discharged_so_far',
-        'clinic_total_no_of_covid_patients_currently_admitted',
-        'clinic_total_no_of_patients_currently_on_ventilator',
-        'clinic_total_on_oxygen',
-        'clinic_total_no_of_beds_allocated_for_covid_patients',
-        'clinic_total_no_of_ventilators_allocated_for_covid_patients'
-    ]
-    # Filter only existing columns
-    cols_exist = [c for c in numeric_cols_to_sum if c in raw_filtered.columns]
-    
-    # Group by Date to create a "National" time series
-    df_filtered = raw_filtered.groupby('date')[cols_exist].sum().reset_index()
-    
-    # Recalculate Ratios for National Level (Weighted Avg Logic)
-    # Since we can't sum ratios, we take mean for simplicity in visualization or re-derive
-    if 'test_positivity_ratio' in raw_filtered.columns:
-        # Weighted average would be better, but mean is acceptable for trend view
-        pos_mean = raw_filtered.groupby('date')['test_positivity_ratio'].mean().reset_index()
-        df_filtered = pd.merge(df_filtered, pos_mean, on='date')
-    
-    # Recalculate 7-day avg for National
-    df_filtered['new_cases_7da'] = df_filtered['new_cases'].rolling(7).mean().fillna(0)
-    
-    # Recalculate Stress Index for National
-    if 'clinic_total_no_of_beds_allocated_for_covid_patients' in df_filtered.columns:
-        df_filtered['healtcare_stress_index'] = (
-            df_filtered['clinic_total_no_of_covid_patients_currently_admitted'] / 
-            df_filtered['clinic_total_no_of_beds_allocated_for_covid_patients'].replace(0, 1) * 100
-        )
-    
-    # Rt Calculation for National
-    shifted = df_filtered['new_cases_7da'].shift(4).replace(0, 1)
-    df_filtered['rt_estimate'] = (df_filtered['new_cases_7da'] / shifted).fillna(1.0)
-
+if len(date_range) == 2:
+    start_date, end_date = date_range
 else:
-    # Single Province View (No aggregation needed)
-    df_filtered = raw_filtered[raw_filtered['province'] == province].copy()
+    start_date, end_date = min_d, max_d
+
+# ============================================
+# 4. Aggregation Logic (The "Fix")
+# ============================================
+# Filter by Date first
+mask_date = (df_raw['date'].dt.date >= start_date) & (df_raw['date'].dt.date <= end_date)
+df_period = df_raw.loc[mask_date]
+
+if province_sel == "All":
+    # CRITICAL FIX: Aggregate SUM for "All"
+    # We group by Date to get the national total for each day
+    numeric_cols = df_period.select_dtypes(include=np.number).columns.tolist()
+    df_agg = df_period.groupby('date')[numeric_cols].sum().reset_index()
+    # Re-calculate averages/ratios for the aggregated data since summing ratios is wrong
+    if 'grand_total_tests_conducted_till_date' in df_agg.columns and 'grand_total_cases_till_date' in df_agg.columns:
+         # Simplified TPR re-calc for aggregation
+         df_agg['test_positivity_ratio'] = df_period.groupby('date')['test_positivity_ratio'].mean().values # Mean of TPR is a safe proxy for visualization
     
-    # Ensure Rt is calculated
-    shifted = df_filtered['new_cases_7da'].shift(4).replace(0, 1)
-    df_filtered['rt_estimate'] = (df_filtered['new_cases_7da'] / shifted).fillna(1.0)
+    # Recalculate 7DA for the Aggregated Line
+    df_agg['new_cases_7da'] = df_agg['new_cases'].rolling(7).mean().fillna(0)
+    df_agg['new_deaths_7da'] = df_agg['new_deaths'].rolling(7).mean().fillna(0)
+    
+    # For Wave Analysis, we need the full dataset with provinces
+    df_analysis = df_period.copy() 
+    
+else:
+    # Filter by Province
+    df_agg = df_period[df_period['province'] == province_sel].copy()
+    df_analysis = df_agg.copy()
+
+if df_agg.empty:
+    st.warning("No data found for this selection.")
+    st.stop()
 
 # ============================================
-# 4. KPI Dashboard
+# 5. KPI Dashboard
 # ============================================
-latest = df_filtered.iloc[-1]
-prev = df_filtered.iloc[-8] if len(df_filtered) > 8 else latest
+# Get Latest available day in the filtered range
+latest = df_agg.iloc[-1]
+# Get comparison (7 days ago within the range, or first day if range < 7)
+prev_idx = max(0, len(df_agg) - 8)
+prev = df_agg.iloc[prev_idx]
 
-st.markdown("### 📊 Situation Report")
-kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
+# Rt Estimation (Simple Growth Proxy)
+try:
+    current_cases_7da = max(1, latest['new_cases_7da'])
+    past_cases_7da = max(1, prev['new_cases_7da'])
+    rt_proxy = (current_cases_7da / past_cases_7da) ** (4/7) # 4-day serial interval
+except:
+    rt_proxy = 1.0
 
-with kpi1:
-    st.metric("New Cases (7d Avg)", f"{int(latest['new_cases_7da']):,}", 
-              delta=f"{int(latest['new_cases_7da'] - prev['new_cases_7da'])}")
-with kpi2:
-    st.metric("Effective Rt", f"{latest['rt_estimate']:.2f}", 
-              delta="Spreading" if latest['rt_estimate'] > 1 else "Contained", delta_color="inverse")
-with kpi3:
-    if 'test_positivity_ratio' in df_filtered.columns:
-        st.metric("Positivity Rate", f"{latest['test_positivity_ratio']:.2f}%",
-                  delta=f"{(latest['test_positivity_ratio'] - prev['test_positivity_ratio']):.2f}%", delta_color="inverse")
-with kpi4:
-    if 'healtcare_stress_index' in df_filtered.columns:
-        st.metric("Healthcare Stress", f"{latest['healtcare_stress_index']:.1f}%", help="% of Beds Occupied")
-with kpi5:
-    st.metric("Total Deaths", f"{int(latest['death_cumulative_total_deaths']):,}")
+c1, c2, c3, c4, c5 = st.columns(5)
+with c1:
+    st.metric("New Cases (Daily)", f"{int(latest['new_cases']):,}", delta=f"{int(latest['new_cases'] - prev['new_cases'])}")
+with c2:
+    st.metric("Active Cases Trend", f"{int(latest['new_cases_7da']):,}", delta=f"{(latest['new_cases_7da'] - prev['new_cases_7da']):.1f} (7-Day Avg)")
+with c3:
+    st.metric("Rt (Growth Rate)", f"{rt_proxy:.2f}", delta="Accelerating" if rt_proxy > 1.1 else "Stable", delta_color="inverse")
+with c4:
+    # Handle missing columns gracefully
+    tpr = latest.get('test_positivity_ratio', 0)
+    prev_tpr = prev.get('test_positivity_ratio', 0)
+    st.metric("Positivity Rate", f"{tpr:.2f}%", delta=f"{tpr - prev_tpr:.2f}%", delta_color="inverse")
+with c5:
+    deaths = latest.get('death_cumulative_total_deaths', 0)
+    new_deaths = latest.get('new_deaths', 0)
+    st.metric("Total Deaths", f"{int(deaths):,}", delta=f"+{int(new_deaths)}")
 
 # ============================================
-# 5. The Tabs (Expanded for "More Stuff")
+# 6. Main Tabs
 # ============================================
 tabs = st.tabs([
-    "📈 Trends & Analysis", 
+    "📈 Trend Analysis", 
     "🏥 Healthcare Capacity", 
-    "📜 Historical Intelligence", 
-    "🤖 AI Projections", 
-    "🧮 Policy Calculator",
-    "🕵️ Data Audit"
+    "🔮 AI Projections", 
+    "📊 Comparative Intelligence",
+    "🕵️ Data Audit",
+    "🧮 Policy Calculator"
 ])
 
-# --- TAB 1: TRENDS ---
+# --- TAB 1: Trend Analysis ---
 with tabs[0]:
-    st.subheader("Epidemic Trajectory")
+    col_opt1, col_opt2 = st.columns([1, 5])
+    with col_opt1:
+        st.markdown("##### View Options")
+        log_scale = st.checkbox("Logarithmic Scale", help="Useful for seeing early exponential growth")
+        show_ma = st.checkbox("Show 7-Day Avg", value=True)
     
-    t_col1, t_col2 = st.columns([3, 1])
-    with t_col2:
-        st.markdown("###### Chart Options")
-        show_log = st.checkbox("Logarithmic Scale")
-        show_cumulative = st.checkbox("Show Cumulative Cases")
-    
-    with t_col1:
-        # Main Trend Plot
-        fig_trend = go.Figure()
+    with col_opt2:
+        # Main Epidemic Curve
+        fig_main = go.Figure()
+        fig_main.add_trace(go.Bar(x=df_agg['date'], y=df_agg['new_cases'], name="Daily Cases", marker_color='rgba(59, 130, 246, 0.4)'))
+        if show_ma:
+            fig_main.add_trace(go.Scatter(x=df_agg['date'], y=df_agg['new_cases_7da'], name="7-Day Average", line=dict(color='#2563EB', width=3)))
         
-        y_metric = 'grand_total_cases_till_date' if show_cumulative else 'new_cases_7da'
-        title_metric = "Cumulative Cases" if show_cumulative else "Daily Cases (7-Day Avg)"
-        
-        fig_trend.add_trace(go.Scatter(
-            x=df_filtered['date'], y=df_filtered[y_metric], 
-            mode='lines', name=title_metric, line=dict(color='#2563EB', width=3), fill='tozeroy'
-        ))
-        
-        if 'new_deaths' in df_filtered.columns and not show_cumulative:
-            fig_trend.add_trace(go.Bar(
-                x=df_filtered['date'], y=df_filtered['new_deaths'], 
-                name="Daily Deaths", marker_color='#EF4444', yaxis='y2', opacity=0.5
-            ))
-
-        fig_trend.update_layout(
-            title=f"{title_metric} vs Deaths",
-            yaxis_type="log" if show_log else "linear",
-            yaxis2=dict(title="Deaths", overlaying='y', side='right'),
+        fig_main.update_layout(
+            title=f"Epidemic Curve - {province_sel}",
+            yaxis_type="log" if log_scale else "linear",
             template="plotly_white",
+            height=450,
             hovermode="x unified"
         )
-        st.plotly_chart(fig_trend, use_container_width=True)
+        st.plotly_chart(fig_main, use_container_width=True)
 
-# --- TAB 2: HEALTHCARE ---
+    # Sub-charts
+    c_sub1, c_sub2 = st.columns(2)
+    with c_sub1:
+        # Deaths
+        fig_d = px.line(df_agg, x='date', y='new_deaths_7da', title="Daily Deaths (7-Day Avg)", color_discrete_sequence=['#EF4444'])
+        st.plotly_chart(fig_d, use_container_width=True)
+    with c_sub2:
+        # Positivity
+        if 'test_positivity_ratio' in df_agg.columns:
+            fig_p = px.line(df_agg, x='date', y='test_positivity_ratio', title="Test Positivity Rate (%)", color_discrete_sequence=['#F59E0B'])
+            # Add threshold line
+            fig_p.add_hline(y=5, line_dash="dot", annotation_text="WHO Threshold (5%)", annotation_position="bottom right")
+            st.plotly_chart(fig_p, use_container_width=True)
+
+# --- TAB 2: Healthcare Capacity ---
 with tabs[1]:
-    st.subheader("System Capacity Monitor")
+    st.subheader("Resource Utilization & Stress")
     
-    c1, c2 = st.columns(2)
+    # Only show if columns exist
+    stress_cols = ['clinic_total_no_of_covid_patients_currently_admitted', 'clinic_total_no_of_patients_currently_on_ventilator', 'clinic_total_on_oxygen']
+    valid_cols = [c for c in stress_cols if c in df_agg.columns]
     
-    with c1:
-        # Stacked Bar: Bed Capacity
-        if 'clinic_total_no_of_beds_allocated_for_covid_patients' in df_filtered.columns:
-            # Create a melt for Used vs Available
-            latest_beds = latest['clinic_total_no_of_beds_allocated_for_covid_patients']
-            used_beds = latest['clinic_total_no_of_covid_patients_currently_admitted']
-            
-            fig_cap = go.Figure()
-            fig_cap.add_trace(go.Indicator(
-                mode = "gauge+number",
-                value = used_beds,
-                title = {'text': "Bed Occupancy"},
-                gauge = {'axis': {'range': [0, max(1, latest_beds)]},
-                         'bar': {'color': "#EF4444" if used_beds/max(1,latest_beds) > 0.8 else "#10B981"},
-                         'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': latest_beds * 0.8}}
-            ))
-            st.plotly_chart(fig_cap, use_container_width=True)
-
-    with c2:
-         # Oxygen vs Vents Time Series
-        fig_stress = go.Figure()
-        if 'clinic_total_on_oxygen' in df_filtered.columns:
-            fig_stress.add_trace(go.Scatter(x=df_filtered['date'], y=df_filtered['clinic_total_on_oxygen'], 
-                                          name="Patients on Oxygen", line=dict(color='#F59E0B')))
-        if 'clinic_total_no_of_patients_currently_on_ventilator' in df_filtered.columns:
-            fig_stress.add_trace(go.Scatter(x=df_filtered['date'], y=df_filtered['clinic_total_no_of_patients_currently_on_ventilator'], 
-                                          name="On Ventilator", line=dict(color='#EF4444')))
+    if valid_cols:
+        fig_res = go.Figure()
+        if 'clinic_total_no_of_covid_patients_currently_admitted' in df_agg.columns:
+            fig_res.add_trace(go.Scatter(x=df_agg['date'], y=df_agg['clinic_total_no_of_covid_patients_currently_admitted'], name="Total Admitted", fill='tozeroy'))
+        if 'clinic_total_on_oxygen' in df_agg.columns:
+            fig_res.add_trace(go.Scatter(x=df_agg['date'], y=df_agg['clinic_total_on_oxygen'], name="On Oxygen", line=dict(width=2)))
+        if 'clinic_total_no_of_patients_currently_on_ventilator' in df_agg.columns:
+            fig_res.add_trace(go.Scatter(x=df_agg['date'], y=df_agg['clinic_total_no_of_patients_currently_on_ventilator'], name="Critical (Ventilator)", line=dict(color='red', width=2)))
         
-        fig_stress.update_layout(title="Critical Care Demand Over Time", template="plotly_white")
-        st.plotly_chart(fig_stress, use_container_width=True)
+        fig_res.update_layout(title="Hospital Load Breakdown", template="plotly_white", height=400)
+        st.plotly_chart(fig_res, use_container_width=True)
+    else:
+        st.info("Healthcare resource data not available for this selection.")
 
-# --- TAB 3: HISTORICAL (The "More Stuff" Tab) ---
+# --- TAB 3: AI Projections ---
 with tabs[2]:
-    st.subheader("🌊 Wave-wise Comparative Intelligence")
-    st.info("Historical breakdown of major pandemic waves to identify patterns.")
-
-    # We need the FULL dataset for this, not just filtered
-    df_hist = df.copy()
+    st.subheader("Projections")
     
-    # Aggregation by Wave & Province
-    wave_stats = df_hist.groupby(['wave', 'province']).agg({
-        'new_cases': 'sum',
+    # Model Setup
+    model_df = df_agg[['date', 'new_cases_7da']].dropna()
+    if len(model_df) > 14:
+        # Feature Engineering: Days since start
+        model_df['days'] = (model_df['date'] - model_df['date'].min()).dt.days
+        
+        # Polynomial Features (Degree 3)
+        poly = PolynomialFeatures(degree=3)
+        X = poly.fit_transform(model_df[['days']])
+        y = model_df['new_cases_7da']
+        
+        # Train
+        model = LinearRegression()
+        model.fit(X, y)
+        
+        # Predict Future (30 Days)
+        last_day = model_df['days'].max()
+        future_days = np.arange(last_day + 1, last_day + 31).reshape(-1, 1)
+        future_X = poly.transform(future_days)
+        predictions = model.predict(future_X)
+        predictions = np.maximum(predictions, 0) # No negative cases
+        
+        # Dates
+        last_date = model_df['date'].max()
+        future_dates = [last_date + timedelta(days=int(x)) for x in range(1, 31)]
+        
+        # Plot
+        fig_ai = go.Figure()
+        fig_ai.add_trace(go.Scatter(x=model_df['date'], y=model_df['new_cases_7da'], name="Historical Trend", line=dict(color='gray')))
+        fig_ai.add_trace(go.Scatter(x=future_dates, y=predictions, name="Projected Trend", line=dict(color='#F59E0B', width=3, dash='dash')))
+        
+        # Confidence Interval (Simulated visual for UI)
+        upper = predictions * 1.2
+        lower = predictions * 0.8
+        fig_ai.add_trace(go.Scatter(x=future_dates, y=upper, mode='lines', line=dict(width=0), showlegend=False))
+        fig_ai.add_trace(go.Scatter(x=future_dates, y=lower, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(245, 158, 11, 0.2)', name="Uncertainty Range"))
+        
+        fig_ai.update_layout(title="30-Day Trend Forecast", template="plotly_dark", height=500)
+        st.plotly_chart(fig_ai, use_container_width=True)
+        st.caption("Note: Projections assume current interaction patterns and testing rates persist.")
+    else:
+        st.warning("Insufficient data for reliable projections in this time range.")
+
+# --- TAB 4: Comparative Intelligence (RESTORED & IMPROVED) ---
+with tabs[3]:
+    st.subheader("Historical & Regional Comparison")
+    
+    # 1. Wave Comparison (The "Old Stuff" Refined)
+    # Use the full raw dataset for this to show all history
+    wave_stats = df_raw.groupby('wave').agg({
+        'new_cases': 'mean',
         'new_deaths': 'sum',
         'test_positivity_ratio': 'mean'
     }).reset_index()
     
-    # Filter for selected province (or show all if 'All' selected)
-    if province != "All":
-        wave_view = wave_stats[wave_stats['province'] == province]
-    else:
-        wave_view = wave_stats.groupby('wave').sum(numeric_only=True).reset_index()
-        wave_view['province'] = "National"
-
-    # Bar Chart: Cases per Wave
-    fig_wave = px.bar(wave_view, x='wave', y='new_cases', color='new_cases', 
-                      title=f"Total Cases by Wave ({province})", color_continuous_scale='Blues')
-    st.plotly_chart(fig_wave, use_container_width=True)
-
-    # Detailed Table
-    st.markdown("#### Wave Performance Metrics")
-    st.dataframe(wave_view.style.format("{:,.0f}", subset=['new_cases', 'new_deaths']))
-
-    # Heatmap (If All is selected)
-    if province == "All":
-        st.markdown("#### Regional Heatmap (Positivity)")
-        heat_data = wave_stats.pivot(index='province', columns='wave', values='test_positivity_ratio')
-        fig_heat = px.imshow(heat_data, color_continuous_scale='RdYlGn_r', title="Avg Positivity % by Wave & Region")
-        st.plotly_chart(fig_heat, use_container_width=True)
-
-# --- TAB 4: AI PROJECTIONS ---
-with tabs[3]:
-    st.subheader("🤖 Predictive Intelligence Engine")
+    # Sort waves logically (not alphabetically)
+    wave_order = ["Wave 1", "Lull 1", "Wave 2", "Wave 3 (Alpha/Beta)", "Wave 4 (Delta)", "Wave 5 (Omicron)", "Endemic Phase"]
+    wave_stats['wave'] = pd.Categorical(wave_stats['wave'], categories=wave_order, ordered=True)
+    wave_stats = wave_stats.sort_values('wave')
     
-    # Prepare Data
-    pred_df = df_filtered[['date', 'new_cases_7da']].dropna()
-    
-    if len(pred_df) > 10:
-        pred_df['days'] = (pred_df['date'] - pred_df['date'].min()).dt.days
+    c_comp1, c_comp2 = st.columns(2)
+    with c_comp1:
+        fig_w = px.bar(wave_stats, x='wave', y='new_cases', title="Average Daily Cases per Wave", color='new_cases', color_continuous_scale='Blues')
+        st.plotly_chart(fig_w, use_container_width=True)
+    with c_comp2:
+        fig_wd = px.bar(wave_stats, x='wave', y='new_deaths', title="Total Deaths per Wave", color='new_deaths', color_continuous_scale='Reds')
+        st.plotly_chart(fig_wd, use_container_width=True)
         
-        # Polynomial Regression (Degree 3)
-        poly = PolynomialFeatures(degree=3)
-        X = poly.fit_transform(pred_df[['days']])
-        model = LinearRegression().fit(X, pred_df['new_cases_7da'])
+    # 2. Regional Heatmap (If All Selected)
+    if province_sel == "All":
+        st.subheader("Regional Intensity Map")
+        # Pivot for heatmap
+        # Group by Month and Province
+        df_hm = df_raw.copy()
+        df_hm['month'] = df_hm['date'].dt.to_period('M').astype(str)
+        hm_data = df_hm.pivot_table(index='province', columns='month', values='new_cases', aggfunc='sum').fillna(0)
         
-        # Forecast 30 days
-        future_days = np.arange(pred_df['days'].max() + 1, pred_df['days'].max() + 31).reshape(-1, 1)
-        future_X = poly.transform(future_days)
-        preds = model.predict(future_X)
-        
-        dates_future = [pred_df['date'].max() + timedelta(days=int(i)) for i in range(1, 31)]
-        
-        fig_ai = go.Figure()
-        fig_ai.add_trace(go.Scatter(x=pred_df['date'], y=pred_df['new_cases_7da'], name="Historical", line=dict(color='gray')))
-        fig_ai.add_trace(go.Scatter(x=dates_future, y=preds, name="AI Forecast (Poly-Reg)", line=dict(color='#2563EB', dash='dash')))
-        
-        # Confidence Interval (Simulated)
-        fig_ai.add_trace(go.Scatter(x=dates_future, y=preds*1.2, line=dict(width=0), showlegend=False))
-        fig_ai.add_trace(go.Scatter(x=dates_future, y=preds*0.8, line=dict(width=0), fill='tonexty', 
-                                    fillcolor='rgba(37, 99, 235, 0.2)', name="Confidence Interval"))
-        
-        fig_ai.update_layout(title="30-Day Trajectory Forecast", template="plotly_white")
-        st.plotly_chart(fig_ai, use_container_width=True)
-    else:
-        st.warning("Insufficient data for predictions.")
+        fig_hm = px.imshow(hm_data, labels=dict(x="Month", y="Province", color="Total Cases"), title="Heatmap: Monthly Cases by Province")
+        st.plotly_chart(fig_hm, use_container_width=True)
 
-# --- TAB 5: CALCULATOR ---
+# --- TAB 5: Data Audit ---
 with tabs[4]:
-    st.subheader("🧮 Intervention Scenario Simulator")
+    st.subheader("Data Integrity")
+    
+    col_a1, col_a2 = st.columns(2)
+    with col_a1:
+        st.markdown("**Bias Check: Tests vs Cases**")
+        if 'grand_total_tests_conducted_till_date' in df_agg.columns:
+            fig_bias = px.scatter(df_agg, x='grand_total_tests_conducted_till_date', y='grand_total_cases_till_date', 
+                                  color='test_positivity_ratio', title="Testing Volume vs Detected Cases")
+            st.plotly_chart(fig_bias, use_container_width=True)
+            st.caption("If points drift left but stay high, it indicates under-testing.")
+            
+    with col_a2:
+        st.markdown("**Missing Data Report**")
+        missing = df_agg.isnull().sum()
+        st.dataframe(missing[missing > 0], use_container_width=True)
+
+# --- TAB 6: Policy Calculator ---
+with tabs[5]:
+    st.subheader("Intervention Simulator")
     
     c_calc1, c_calc2 = st.columns([1, 2])
     with c_calc1:
-        base_rt = st.number_input("Current Rt", value=float(max(0.5, latest['rt_estimate'])), step=0.1)
-        st.markdown("**Select Interventions:**")
-        mask_on = st.checkbox("Mask Mandate (-15%)")
-        lockdown_on = st.checkbox("Smart Lockdown (-25%)")
+        st.markdown("**Simulation Parameters**")
+        sim_rt = st.slider("Base Rt", 0.5, 3.0, float(max(0.5, min(3.0, rt_proxy))), 0.1)
+        sim_active = int(latest['new_cases_7da'])
         
-        reduction = (0.15 if mask_on else 0) + (0.25 if lockdown_on else 0)
-        final_rt = base_rt * (1 - reduction)
-        st.metric("Projected Rt", f"{final_rt:.2f}", delta=f"-{reduction*100:.0f}%")
-
+        st.markdown("**Policy Bundle**")
+        p_mask = st.checkbox("Strict Masking (-15%)")
+        p_dist = st.checkbox("Social Distancing (-20%)")
+        p_school = st.checkbox("Remote Schooling (-10%)")
+        
+        reduction = 0.0
+        if p_mask: reduction += 0.15
+        if p_dist: reduction += 0.20
+        if p_school: reduction += 0.10
+        
+        final_rt = sim_rt * (1 - reduction)
+        st.metric("Effective Rt", f"{final_rt:.2f}", delta=f"-{reduction*100:.0f}%")
+        
     with c_calc2:
         days = 60
-        dates = [datetime.now() + timedelta(days=i) for i in range(days)]
-        cases_base = [latest['new_cases_7da'] * (base_rt ** (i/4)) for i in range(days)]
-        cases_new = [latest['new_cases_7da'] * (final_rt ** (i/4)) for i in range(days)]
+        x_days = list(range(days))
+        y_base = [sim_active * (sim_rt ** (d/4)) for d in x_days]
+        y_int = [sim_active * (final_rt ** (d/4)) for d in x_days]
         
         fig_sim = go.Figure()
-        fig_sim.add_trace(go.Scatter(x=dates, y=cases_base, name="Status Quo", line=dict(color='red')))
-        fig_sim.add_trace(go.Scatter(x=dates, y=cases_new, name="With Intervention", line=dict(color='green')))
-        fig_sim.update_layout(title="Projected Impact", xaxis_title="Date", yaxis_title="Daily Cases")
+        fig_sim.add_trace(go.Scatter(x=x_days, y=y_base, name="Do Nothing", line=dict(color='red', dash='dot')))
+        fig_sim.add_trace(go.Scatter(x=x_days, y=y_int, name="With Intervention", line=dict(color='green', width=3)))
+        fig_sim.update_layout(title="Projected Daily Cases (60 Days)", xaxis_title="Days from Now", yaxis_title="Daily Cases")
         st.plotly_chart(fig_sim, use_container_width=True)
 
-# --- TAB 6: DATA AUDIT ---
-with tabs[5]:
-    st.subheader("Bias & Integrity Check")
-    
-    if 'grand_total_tests_conducted_till_date' in df_filtered.columns:
-        fig_bias = px.scatter(df_filtered, x='grand_total_tests_conducted_till_date', y='grand_total_cases_till_date',
-                              color='test_positivity_ratio' if 'test_positivity_ratio' in df_filtered.columns else None,
-                              title="Testing Bias: Do more tests equals more cases?",
-                              labels=col_map)
-        st.plotly_chart(fig_bias, use_container_width=True)
-    else:
-        st.warning("Testing data unavailable for bias check.")
-
 st.markdown("---")
+st.caption(f"CPIF v3.0 | Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
