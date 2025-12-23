@@ -328,4 +328,5 @@ with t5:
         st.plotly_chart(fig_sim, use_container_width=True)
 
 st.markdown("---")
-st.caption("Framework v4.0 (Group Consensus Build) | Developed for MS Healthcare Intelligence Project")
+st.caption("Framework v4.0 | CPIF")
+
