@@ -299,7 +299,6 @@ with tabs[3]:
     with col_p1:
         forecast_days = st.slider("Forecast Horizon", 15, 90, 30)
         degree = st.selectbox("Polynomial Degree", [2, 3, 4], index=1)
-        st.caption("Lower limit set to 0 to prevent negative case predictions.")
     
     with col_p2:
         pred_df = df_filtered[['date', 'new_cases_7da']].dropna()
